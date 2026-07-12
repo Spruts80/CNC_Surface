@@ -1,22 +1,5 @@
 # 🎯 G-Code Studio
 
-gcode-studio/
-├── gcode_studio/
-│   ├── __init__.py          # Инициализация пакета
-│   ├── config.py            # Константы и настройки
-│   ├── models.py            # Модели данных (MillingParams, GCodePoint)
-│   ├── generator.py         # Генератор G-кода
-│   ├── parser.py            # Парсер G-кода
-│   ├── viewer_window.py     # Окно просмотра файла
-│   ├── controller.py        # Основной контроллер (GCodeStudio)
-│   └── main.py              # Точка входа
-├── requirements.txt         # Зависимости Python
-├── README.md                # Документация
-├── .gitignore               # Игнор-файл Git
-├── LICENSE                  # Лицензия MIT
-├── GCodeStudio.spec         # Конфигурация PyInstaller
-└── app_icon.ico             # Иконка приложения
-
 **Генератор и визуализатор G-кода для фрезерных станков с ЧПУ**
 
 ![Python](https://img.shields.io/badge/Python-3.7+-blue.svg)
