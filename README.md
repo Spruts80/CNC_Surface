@@ -80,23 +80,37 @@ cd gcode-studio
 ```
 
 ## Шаг 2: Установка зависимостей
-```pip install -r requirements.txt```
+```
+pip install -r requirements.txt
+```
 Примечание для Linux: Tkinter может потребоваться установить отдельно:
-```sudo apt install python3-tk```
+```
+sudo apt install python3-tk
+```
 
 Шаг 3: Запуск
-```python main.py```
+```
+python main.py
+```
 
 ### Сборка EXE (Windows)
 
 запуск установки pyinstaller в командной строке
-```pip install pyinstaller```
+```
+pip install pyinstaller
+```
 потом запуск генератора EXE файла
-```build_gcode_studio.bat```
+```
+build_gcode_studio.bat
+```
 или
-```Build.ps1```
+```
+Build.ps1
+```
 или
-```pyinstaller GCodeStudio.spec```
+```
+pyinstaller GCodeStudio.spec
+```
 в командной строке
 Готовый файл будет в папке dist/.
 
