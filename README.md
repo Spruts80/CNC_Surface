@@ -90,13 +90,13 @@ python main.py
 ### Сборка EXE (Windows)
 
 запуск в командной строке
-pip install pyinstaller
+```pip install pyinstaller```
 потом
-запуск build_gcode_studio.bat
+запуск ```build_gcode_studio.bat```
 или
-Build.ps1
+```Build.ps1```
 или
-pyinstaller GCodeStudio.spec
+```pyinstaller GCodeStudio.spec```
 в командной строке
 Готовый файл будет в папке dist/.
 
