@@ -49,7 +49,7 @@ setup(
     long_description_content_type='text/markdown',
     author='G-Code Studio Team',
     author_email='gcode.studio@example.com',
-    url='https://github.com/yourusername/gcode-studio',
+    url='https://github.com/Spruts80/CNC_Surface',
     license='MIT',
 
     # ============================================================
@@ -116,8 +116,8 @@ setup(
     # Дополнительные параметры
     # ============================================================
     project_urls={
-        'Bug Reports': 'https://github.com/yourusername/gcode-studio/issues',
-        'Source': 'https://github.com/yourusername/gcode-studio',
-        'Documentation': 'https://github.com/yourusername/gcode-studio/wiki',
+        'Bug Reports': 'https://github.com/Spruts80/CNC_Surface/issues',
+        'Source': 'https://github.com/Spruts80/CNC_Surface',
+        'Documentation': 'https://github.com/Spruts80/CNC_Surface/wiki',
     },
 )
