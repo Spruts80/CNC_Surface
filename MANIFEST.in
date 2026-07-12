@@ -1,0 +1,20 @@
+# Включить README и LICENSE
+include README.md
+include LICENSE
+include requirements.txt
+
+# Включить иконку
+include app_icon.ico
+
+# Включить файлы конфигурации
+include pyproject.toml
+include GCodeStudio.spec
+
+# Рекурсивно включить все ресурсы
+recursive-include gcode_studio *.ico *.png *.jpg
+
+# Исключить временные файлы
+global-exclude *.py[cod]
+global-exclude __pycache__
+global-exclude *.so
+global-exclude .DS_Store
