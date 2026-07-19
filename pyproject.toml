@@ -36,10 +36,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Spruts80/CNC_Surface"
-"Bug Tracker" = "https://github.com/Spruts80/CNC_Surface/issues"
-Documentation = "https://github.com/Spruts80/CNC_Surface/wiki"
-Repository = "https://github.com/Spruts80/CNC_Surface"
+Homepage = "https://github.com/yourusername/gcode-studio"
+"Bug Tracker" = "https://github.com/yourusername/gcode-studio/issues"
+Documentation = "https://github.com/yourusername/gcode-studio/wiki"
+Repository = "https://github.com/yourusername/gcode-studio"
 
 [project.scripts]
 gcode-studio = "main:main"

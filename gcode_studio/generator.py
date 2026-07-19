@@ -1,21 +1,10 @@
 """
 Генератор G-кода для различных стратегий фрезерования.
-
-Поддерживает четыре типа обработки:
-- Зигзаг по оси X
-- Зигзаг по оси Y
-- От центра змейкой (спиральная обработка)
-- Контурное фрезерование (от края к центру / от центра к краю)
-
-Каждая стратегия учитывает радиус фрезы, припуск (allowance)
-и направление фрезерования (попутное/встречное).
 """
-
 import os
 from datetime import datetime
 from typing import List, Tuple
 
-# gcode_studio/generator.py
 from .models import MillingParams
 from .config import (
     GCODE_EPSILON, GCODE_CENTER_EPSILON, GCODE_Z_PRECISION,
@@ -36,47 +25,22 @@ from .config import (
     HEADER_LABEL_PASSES, HEADER_LABEL_MODES, HEADER_LABEL_FEED_XY,
     HEADER_LABEL_FEED_Z, HEADER_LABEL_SPEED, HEADER_LABEL_RPM,
     HEADER_LABEL_MM_MIN, HEADER_LABEL_Z_LEVELS, HEADER_LABEL_Z_VALUE,
+    HEADER_LABEL_RAPID_FEED, HEADER_LABEL_ALLOWANCE, HEADER_LABEL_BACKTRACK,
     HEADER_DATE_FORMAT,
 )
 
 
 class GCodeGenerator:
-    """Генератор G-кода.
-
-    Создаёт файлы G-кода для фрезерных станков с ЧПУ
-    на основе заданных параметров обработки.
-    """
-
     def __init__(self, params: MillingParams):
-        """Инициализация генератора.
-
-        Args:
-            params: Параметры фрезерования
-        """
         self.params = params
         self.generated_files: List[str] = []
 
     def calculate_overlap_percent(self) -> float:
-        """Расчёт процента перекрытия фрезы.
-
-        Перекрытие показывает, какая часть диаметра фрезы
-        перекрывается с предыдущим проходом.
-
-        Returns:
-            Процент перекрытия (0-100). Возвращает 0 при некорректном диаметре.
-        """
         if self.params.tool_diameter <= 0:
             return 0.0
         return (self.params.tool_diameter - self.params.stepover) / self.params.tool_diameter * 100
 
     def validate_params(self) -> Tuple[bool, str]:
-        """Валидация параметров обработки.
-
-        Проверяет корректность всех параметров перед генерацией.
-
-        Returns:
-            Кортеж (успех, сообщение об ошибке или "OK")
-        """
         p = self.params
         if p.x_min >= p.x_max:
             return False, "X_MIN >= X_MAX"
@@ -95,29 +59,16 @@ class GCodeGenerator:
         return True, "OK"
 
     def generate_to_files(self, output_dir: str) -> Tuple[bool, List[str]]:
-        """Генерация файлов G-кода.
-
-        Создаёт один или несколько файлов с G-кодом, разбитых
-        по количеству проходов на файл.
-
-        Args:
-            output_dir: Директория для сохранения файлов
-
-        Returns:
-            Кортеж (успех, список путей к созданным файлам)
-        """
         self.generated_files = []
-        valid, msg = self.validate_params()
+        valid, _ = self.validate_params()
         if not valid:
             return False, []
 
-        # Формируем уровни Z
         z_levels = []
         z = self.params.z_start
         while z >= self.params.z_end - GCODE_EPSILON:
             z_levels.append(round(z, 4))
             z -= self.params.z_step
-
         if not z_levels:
             return False, []
 
@@ -134,8 +85,6 @@ class GCodeGenerator:
             chunk = z_levels[i:i + passes_per_file]
             if not chunk:
                 continue
-
-            # Формируем имя файла с названием метода обработки
             milling_type = self.params.milling_type
             if milling_type == "contour":
                 direction = self.params.contour_direction
@@ -143,7 +92,6 @@ class GCodeGenerator:
             else:
                 filename = f"{FILE_PREFIX}_{milling_type}_p{file_num}{FILE_EXTENSION}"
 
-            # Генерируем заголовок с параметрами
             header = self._generate_header(chunk, file_num, total_files)
 
             file_lines = [GCODE_FILE_START] + header + [
@@ -194,19 +142,6 @@ class GCodeGenerator:
         return True, self.generated_files
 
     def _generate_header(self, z_levels: List[float], file_num: int, total_files: int) -> List[str]:
-        """Генерация заголовка с параметрами обработки.
-
-        Создаёт блок комментариев в начале файла G-кода,
-        содержащий все параметры текущей обработки.
-
-        Args:
-            z_levels: Список уровней Z в текущем файле
-            file_num: Номер текущего файла
-            total_files: Общее количество файлов
-
-        Returns:
-            Список строк заголовка
-        """
         h = []
         h.append(HEADER_SEPARATOR)
         h.append(HEADER_TITLE)
@@ -241,7 +176,12 @@ class GCodeGenerator:
         h.append(HEADER_LABEL_MODES)
         h.append(f"{HEADER_LABEL_FEED_XY}{self.params.feed_xy}{HEADER_LABEL_MM_MIN}")
         h.append(f"{HEADER_LABEL_FEED_Z}{self.params.feed_z}{HEADER_LABEL_MM_MIN}")
+        h.append(f"{HEADER_LABEL_RAPID_FEED}{self.params.rapid_feed}{HEADER_LABEL_MM_MIN}")
         h.append(f"{HEADER_LABEL_SPEED}{self.params.spindle_speed}{HEADER_LABEL_RPM}")
+        h.append("")
+        h.append(f"{HEADER_LABEL_ALLOWANCE}{self.params.allowance}{HEADER_LABEL_MM}")
+        if self.params.milling_type in ("zigzag_x", "zigzag_y"):
+            h.append(f"{HEADER_LABEL_BACKTRACK}{'Включён' if self.params.backtrack_enabled else 'Выключен'}")
         h.append("")
         h.append(HEADER_LABEL_Z_LEVELS)
         for z_val in z_levels:
@@ -252,129 +192,140 @@ class GCodeGenerator:
         return h
 
     def _zigzag_x(self, z: float, ln: int) -> Tuple[List[str], int]:
-        """Генерация зигзага по оси X с шагом по Y.
-
-        Фреза движется вдоль оси X, переходя на новый проход
-        по оси Y с заданным шагом (stepover).
-
-        Args:
-            z: Текущая глубина обработки
-            ln: Начальный номер строки G-кода
-
-        Returns:
-            Кортеж (строки G-кода, следующий номер строки)
-        """
         lines = []
         p = self.params
-
-        # Границы с учётом припуска
         x_start = p.x_min - p.allowance
         x_end = p.x_max + p.allowance
         y_start = p.y_min - p.allowance
         y_end = p.y_max + p.allowance
+        is_climb = (p.milling_direction == "climb")
 
-        lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y_end:.{GCODE_COORD_PRECISION}f}")
-        ln += GCODE_LINE_NUM_STEP
-        lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
-        ln += GCODE_LINE_NUM_STEP
-
-        y = y_end
-        gr = (p.milling_direction == "climb")
-
-        while y >= y_start - GCODE_EPSILON:
-            target_x = x_end if gr else x_start
-            lines.append(f"N{ln} G1 X{target_x:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+        if p.backtrack_enabled:
+            if is_climb:
+                lines.append(f"N{ln} G0 X{x_end:.{GCODE_COORD_PRECISION}f} Y{y_end:.{GCODE_COORD_PRECISION}f}")
+            else:
+                lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y_end:.{GCODE_COORD_PRECISION}f}")
             ln += GCODE_LINE_NUM_STEP
-            y -= p.stepover
-            if y >= y_start - GCODE_EPSILON:
-                lines.append(f"N{ln} G1 Y{y:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+            lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
+            ln += GCODE_LINE_NUM_STEP
+            y = y_end
+            while y >= y_start - GCODE_EPSILON:
+                if is_climb:
+                    lines.append(f"N{ln} G1 X{x_start:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                else:
+                    lines.append(f"N{ln} G1 X{x_end:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
                 ln += GCODE_LINE_NUM_STEP
-            gr = not gr
-
+                y -= p.stepover
+                if y >= y_start - GCODE_EPSILON:
+                    lines.append(f"N{ln} G0 Z{p.safe_z:.1f}")
+                    ln += GCODE_LINE_NUM_STEP
+                    if is_climb:
+                        lines.append(f"N{ln} G0 X{x_end:.{GCODE_COORD_PRECISION}f} Y{y:.{GCODE_COORD_PRECISION}f}")
+                    else:
+                        lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y:.{GCODE_COORD_PRECISION}f}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
+                    ln += GCODE_LINE_NUM_STEP
+        else:
+            if is_climb:
+                lines.append(f"N{ln} G0 X{x_end:.{GCODE_COORD_PRECISION}f} Y{y_end:.{GCODE_COORD_PRECISION}f}")
+            else:
+                lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y_end:.{GCODE_COORD_PRECISION}f}")
+            ln += GCODE_LINE_NUM_STEP
+            lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
+            ln += GCODE_LINE_NUM_STEP
+            y = y_end
+            gr = is_climb
+            while y >= y_start - GCODE_EPSILON:
+                target_x = x_start if gr else x_end
+                lines.append(f"N{ln} G1 X{target_x:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                ln += GCODE_LINE_NUM_STEP
+                y -= p.stepover
+                if y >= y_start - GCODE_EPSILON:
+                    lines.append(f"N{ln} G1 Y{y:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                gr = not gr
         return lines, ln
 
     def _zigzag_y(self, z: float, ln: int) -> Tuple[List[str], int]:
-        """Генерация зигзага по оси Y с шагом по X.
-
-        Фреза движется вдоль оси Y, переходя на новый проход
-        по оси X с заданным шагом (stepover).
-
-        Args:
-            z: Текущая глубина обработки
-            ln: Начальный номер строки G-кода
-
-        Returns:
-            Кортеж (строки G-кода, следующий номер строки)
-        """
         lines = []
         p = self.params
-
-        # Границы с учётом припуска
         x_start = p.x_min - p.allowance
         x_end = p.x_max + p.allowance
         y_start = p.y_min - p.allowance
         y_end = p.y_max + p.allowance
+        is_climb = (p.milling_direction == "climb")
 
-        lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y_start:.{GCODE_COORD_PRECISION}f}")
-        ln += GCODE_LINE_NUM_STEP
-        lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
-        ln += GCODE_LINE_NUM_STEP
-
-        x = x_start
-        gu = (p.milling_direction == "climb")
-
-        while x <= x_end + GCODE_EPSILON:
-            target_y = y_end if gu else y_start
-            lines.append(f"N{ln} G1 Y{target_y:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+        if p.backtrack_enabled:
+            if is_climb:
+                lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y_end:.{GCODE_COORD_PRECISION}f}")
+            else:
+                lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y_start:.{GCODE_COORD_PRECISION}f}")
             ln += GCODE_LINE_NUM_STEP
-            x += p.stepover
-            if x <= x_end + GCODE_EPSILON:
-                lines.append(f"N{ln} G1 X{x:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+            lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
+            ln += GCODE_LINE_NUM_STEP
+            x = x_start
+            while x <= x_end + GCODE_EPSILON:
+                if is_climb:
+                    lines.append(f"N{ln} G1 Y{y_start:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                else:
+                    lines.append(f"N{ln} G1 Y{y_end:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
                 ln += GCODE_LINE_NUM_STEP
-            gu = not gu
-
+                x += p.stepover
+                if x <= x_end + GCODE_EPSILON:
+                    lines.append(f"N{ln} G0 Z{p.safe_z:.1f}")
+                    ln += GCODE_LINE_NUM_STEP
+                    if is_climb:
+                        lines.append(f"N{ln} G0 X{x:.{GCODE_COORD_PRECISION}f} Y{y_end:.{GCODE_COORD_PRECISION}f}")
+                    else:
+                        lines.append(f"N{ln} G0 X{x:.{GCODE_COORD_PRECISION}f} Y{y_start:.{GCODE_COORD_PRECISION}f}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
+                    ln += GCODE_LINE_NUM_STEP
+        else:
+            if is_climb:
+                lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y_end:.{GCODE_COORD_PRECISION}f}")
+            else:
+                lines.append(f"N{ln} G0 X{x_start:.{GCODE_COORD_PRECISION}f} Y{y_start:.{GCODE_COORD_PRECISION}f}")
+            ln += GCODE_LINE_NUM_STEP
+            lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
+            ln += GCODE_LINE_NUM_STEP
+            x = x_start
+            gu = is_climb
+            while x <= x_end + GCODE_EPSILON:
+                target_y = y_start if gu else y_end
+                lines.append(f"N{ln} G1 Y{target_y:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                ln += GCODE_LINE_NUM_STEP
+                x += p.stepover
+                if x <= x_end + GCODE_EPSILON:
+                    lines.append(f"N{ln} G1 X{x:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                gu = not gu
         return lines, ln
 
     def _center_spiral(self, z: float, ln: int) -> Tuple[List[str], int]:
-        """Генерация обработки от центра змейкой.
-
-        Поддерживает два направления:
-        - outside_in: от края к центру
-        - inside_out: от центра к краю
-
-        Между верхней и нижней половинами фреза поднимается
-        на безопасную высоту для предотвращения врезания в материал.
-
-        Args:
-            z: Текущая глубина обработки
-            ln: Начальный номер строки G-кода
-
-        Returns:
-            Кортеж (строки G-кода, следующий номер строки)
-        """
         lines = []
         p = self.params
         cx = (p.x_min + p.x_max) / 2
         cy = (p.y_min + p.y_max) / 2
-
-        # Границы с учётом припуска
+        is_climb = (p.milling_direction == "climb")
         x_left = p.x_min - p.allowance
         x_right = p.x_max + p.allowance
         y_bottom = p.y_min - p.allowance
         y_top = p.y_max + p.allowance
 
         if p.contour_direction == "outside_in":
-            # === ОТ КРАЯ К ЦЕНТРУ ===
-            current_x = x_left
-
-            lines.append(f"N{ln} G0 X{x_left:.{GCODE_COORD_PRECISION}f} Y{y_bottom:.{GCODE_COORD_PRECISION}f}")
+            if is_climb:
+                current_x = x_left
+                lines.append(f"N{ln} G0 X{x_left:.{GCODE_COORD_PRECISION}f} Y{y_bottom:.{GCODE_COORD_PRECISION}f}")
+            else:
+                current_x = x_right
+                lines.append(f"N{ln} G0 X{x_right:.{GCODE_COORD_PRECISION}f} Y{y_bottom:.{GCODE_COORD_PRECISION}f}")
             ln += GCODE_LINE_NUM_STEP
             lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
             ln += GCODE_LINE_NUM_STEP
-
-            # Зигзаг ВВЕРХ от нижнего края к центру
             y = y_bottom
-            going_right = True
+            going_right = is_climb
             while y <= cy - GCODE_EPSILON:
                 lines.append(f"N{ln} G1 Y{y:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
                 ln += GCODE_LINE_NUM_STEP
@@ -385,24 +336,16 @@ class GCodeGenerator:
                     current_x = target_x
                 y += p.stepover
                 going_right = not going_right
-
-            # === ПОДЪЁМ НА БЕЗОПАСНУЮ ВЫСОТУ ===
             lines.append(f"N{ln} G0 Z{p.safe_z:.1f}")
             ln += GCODE_LINE_NUM_STEP
-
-            # Переезд к верхнему краю
             start_x = x_right if going_right else x_left
             lines.append(f"N{ln} G0 X{start_x:.{GCODE_COORD_PRECISION}f} Y{y_top:.{GCODE_COORD_PRECISION}f}")
             ln += GCODE_LINE_NUM_STEP
             current_x = start_x
-
-            # === ОПУСКАНИЕ НА РАБОЧУЮ ГЛУБИНУ ===
             lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
             ln += GCODE_LINE_NUM_STEP
-
-            # Зигзаг ВНИЗ от верхнего края к центру
             y = y_top
-            going_left = True
+            going_left = not is_climb
             while y >= cy + GCODE_EPSILON:
                 target_x = x_left if going_left else x_right
                 if abs(current_x - target_x) > GCODE_CENTER_EPSILON:
@@ -413,24 +356,26 @@ class GCodeGenerator:
                 ln += GCODE_LINE_NUM_STEP
                 y -= p.stepover
                 going_left = not going_left
-
         else:
-            # === ОТ ЦЕНТРА К КРАЮ (inside_out) ===
-            current_x = x_left
-
-            lines.append(f"N{ln} G0 X{x_left:.{GCODE_COORD_PRECISION}f} Y{cy:.{GCODE_COORD_PRECISION}f}")
+            if is_climb:
+                current_x = x_left
+                lines.append(f"N{ln} G0 X{x_left:.{GCODE_COORD_PRECISION}f} Y{cy:.{GCODE_COORD_PRECISION}f}")
+            else:
+                current_x = x_right
+                lines.append(f"N{ln} G0 X{x_right:.{GCODE_COORD_PRECISION}f} Y{cy:.{GCODE_COORD_PRECISION}f}")
             ln += GCODE_LINE_NUM_STEP
             lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
             ln += GCODE_LINE_NUM_STEP
-
-            # Первый проход по центру
-            lines.append(f"N{ln} G1 X{x_right:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-            ln += GCODE_LINE_NUM_STEP
-            current_x = x_right
-
-            # Зигзаг ВВЕРХ от центра к верхнему краю
+            if is_climb:
+                lines.append(f"N{ln} G1 X{x_right:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                ln += GCODE_LINE_NUM_STEP
+                current_x = x_right
+            else:
+                lines.append(f"N{ln} G1 X{x_left:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                ln += GCODE_LINE_NUM_STEP
+                current_x = x_left
             y = cy + p.stepover
-            going_left = True
+            going_left = is_climb
             while y <= y_top + GCODE_EPSILON:
                 lines.append(f"N{ln} G1 Y{y:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
                 ln += GCODE_LINE_NUM_STEP
@@ -441,25 +386,17 @@ class GCodeGenerator:
                     current_x = target_x
                 y += p.stepover
                 going_left = not going_left
-
-            # === ПОДЪЁМ НА БЕЗОПАСНУЮ ВЫСОТУ ===
             lines.append(f"N{ln} G0 Z{p.safe_z:.1f}")
             ln += GCODE_LINE_NUM_STEP
-
-            # Переезд к началу нижней половины
             start_x = x_left if going_left else x_right
             start_y = cy - p.stepover
             lines.append(f"N{ln} G0 X{start_x:.{GCODE_COORD_PRECISION}f} Y{start_y:.{GCODE_COORD_PRECISION}f}")
             ln += GCODE_LINE_NUM_STEP
             current_x = start_x
-
-            # === ОПУСКАНИЕ НА РАБОЧУЮ ГЛУБИНУ ===
             lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
             ln += GCODE_LINE_NUM_STEP
-
-            # Зигзаг ВНИЗ от центра к нижнему краю
             y = cy - p.stepover
-            going_right = True
+            going_right = not is_climb
             while y >= y_bottom - GCODE_EPSILON:
                 target_x = x_right if going_right else x_left
                 if abs(current_x - target_x) > GCODE_CENTER_EPSILON:
@@ -470,45 +407,27 @@ class GCodeGenerator:
                 ln += GCODE_LINE_NUM_STEP
                 y -= p.stepover
                 going_right = not going_right
-
         return lines, ln
 
     def _contour(self, z: float, ln: int) -> Tuple[List[str], int]:
-        """Генерация контурной обработки.
-
-        Поддерживает два направления:
-        - outside_in: от края к центру (с оптимизацией последнего прохода)
-        - inside_out: от центра к краю
-
-        При режиме outside_in, если ширина оставшейся области
-        меньше диаметра фрезы, генерируется один центральный
-        проход вместо вырожденного прямоугольника.
-
-        Args:
-            z: Текущая глубина обработки
-            ln: Начальный номер строки G-кода
-
-        Returns:
-            Кортеж (строки G-кода, следующий номер строки)
-        """
         lines = []
         p = self.params
         r = p.tool_diameter / 2
+        is_climb = (p.milling_direction == "climb")
 
         if p.contour_direction == "outside_in":
-            # === ОТ КРАЯ К ЦЕНТРУ ===
             x1 = p.x_min + r - p.allowance
             y1 = p.y_min + r - p.allowance
             x2 = p.x_max - r + p.allowance
             y2 = p.y_max - r + p.allowance
-
-            lines.append(f"N{ln} G0 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f}")
+            if is_climb:
+                lines.append(f"N{ln} G0 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f}")
+            else:
+                lines.append(f"N{ln} G0 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f}")
             ln += GCODE_LINE_NUM_STEP
             lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
             ln += GCODE_LINE_NUM_STEP
-
             while (x2 - x1) > GCODE_EPSILON and (y2 - y1) > GCODE_EPSILON:
-                # Оптимизация: если область уже диаметра фрезы — один проход
                 if (x2 - x1) < p.tool_diameter or (y2 - y1) < p.tool_diameter:
                     center_x = (x1 + x2) / 2
                     center_y = (y1 + y2) / 2
@@ -523,65 +442,69 @@ class GCodeGenerator:
                         lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{center_y:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
                         ln += GCODE_LINE_NUM_STEP
                     break
-
-                lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-                ln += GCODE_LINE_NUM_STEP
-                lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-                ln += GCODE_LINE_NUM_STEP
-                lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-                ln += GCODE_LINE_NUM_STEP
-                lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-                ln += GCODE_LINE_NUM_STEP
-
+                if is_climb:
+                    lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                else:
+                    lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
                 x1 += p.stepover
                 y1 += p.stepover
                 x2 -= p.stepover
                 y2 -= p.stepover
-
         else:
-            # === ОТ ЦЕНТРА К КРАЮ (inside_out) ===
             cx = (p.x_min + p.x_max) / 2
             cy = (p.y_min + p.y_max) / 2
-
-            # Начальный прямоугольник в центре
             x1 = cx - p.stepover / 2
             y1 = cy - p.stepover / 2
             x2 = cx + p.stepover / 2
             y2 = cy + p.stepover / 2
-
-            # Границы с учётом припуска
             limit_x1 = p.x_min + r - p.allowance
             limit_y1 = p.y_min + r - p.allowance
             limit_x2 = p.x_max - r + p.allowance
             limit_y2 = p.y_max - r + p.allowance
-
             lines.append(f"N{ln} G0 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f}")
             ln += GCODE_LINE_NUM_STEP
             lines.append(f"N{ln} G1 Z{z:.{GCODE_Z_PRECISION}f} F{p.feed_z}")
             ln += GCODE_LINE_NUM_STEP
-
             while True:
-                lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-                ln += GCODE_LINE_NUM_STEP
-                lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-                ln += GCODE_LINE_NUM_STEP
-                lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-                ln += GCODE_LINE_NUM_STEP
-                lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
-                ln += GCODE_LINE_NUM_STEP
-
-                # Проверяем, достигли ли границ
+                if is_climb:
+                    lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                else:
+                    lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y2:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x2:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
+                    lines.append(f"N{ln} G1 X{x1:.{GCODE_COORD_PRECISION}f} Y{y1:.{GCODE_COORD_PRECISION}f} F{p.feed_xy}")
+                    ln += GCODE_LINE_NUM_STEP
                 if (x1 <= limit_x1 + GCODE_EPSILON and y1 <= limit_y1 + GCODE_EPSILON and
                         x2 >= limit_x2 - GCODE_EPSILON and y2 >= limit_y2 - GCODE_EPSILON):
                     break
-
-                # Расширяем прямоугольник
                 x1 -= p.stepover
                 y1 -= p.stepover
                 x2 += p.stepover
                 y2 += p.stepover
-
-                # Ограничиваем границами поля с припуском
                 if x1 < limit_x1:
                     x1 = limit_x1
                 if y1 < limit_y1:
@@ -590,5 +513,4 @@ class GCodeGenerator:
                     x2 = limit_x2
                 if y2 > limit_y2:
                     y2 = limit_y2
-
         return lines, ln
